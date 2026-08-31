@@ -6,6 +6,7 @@ import { digest, id, clientOrderId } from "./core/ids";
 import {
   CreateRunInputSchema,
   FaultInputSchema,
+  Intent,
   IntentInputSchema,
   IntentSchema,
   ObservationInputSchema,
@@ -18,6 +19,7 @@ import { FileStore } from "./store/file-store";
 const MAX_BODY_BYTES = 1_000_000;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 120;
+const RATE_LIMIT_MAX_CLIENTS = 10_000;
 
 function safeError(error: unknown): string {
   if (error instanceof ZodError) return "Request validation failed";
@@ -53,6 +55,8 @@ export class VurqenApp {
   readonly providers: Record<"bingx" | "weex", ExchangeProvider>;
   readonly explainer: ReturnType<typeof createExplainer>;
   private readonly requestCounts = new Map<string, { startedAt: number; count: number }>();
+  private readonly runLocks = new Map<string, Promise<void>>();
+  private lastRateLimitCleanup = 0;
 
   constructor(options: VurqenAppOptions = {}) {
     if (config.requireApiToken && !config.apiToken) {
@@ -74,10 +78,18 @@ export class VurqenApp {
   }
 
   async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    response.setHeader("Access-Control-Allow-Origin", "*");
-    response.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    if (config.corsOrigin) {
+      response.setHeader("Vary", "Origin");
+      if (request.headers.origin === config.corsOrigin) response.setHeader("Access-Control-Allow-Origin", config.corsOrigin);
+    }
+    response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     response.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
     response.setHeader("Cache-Control", "no-store");
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    response.setHeader("X-Frame-Options", "DENY");
+    response.setHeader("Referrer-Policy", "no-referrer");
+    response.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    response.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
 
     if (request.method === "OPTIONS") {
       response.writeHead(204);
@@ -93,6 +105,16 @@ export class VurqenApp {
       const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
       const pathParts = url.pathname.split("/").filter(Boolean);
       const method = request.method ?? "GET";
+
+      if (method === "GET" && url.pathname === "/") {
+        this.send(response, 200, {
+          name: "Vurqen",
+          description: "Evidence-first incident response for exchange-connected AI trading workflows.",
+          api: "/api",
+          health: "/api/health",
+        });
+        return;
+      }
 
       if (method === "GET" && url.pathname === "/api/health") {
         this.send(response, 200, { ok: true, ...publicConfig() });
@@ -215,6 +237,23 @@ export class VurqenApp {
     return this.providers[selected];
   }
 
+  private async withRunLock<T>(runId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.runLocks.get(runId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queued = previous.then(() => current);
+    this.runLocks.set(runId, queued);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.runLocks.get(runId) === queued) this.runLocks.delete(runId);
+    }
+  }
+
   private authorized(request: IncomingMessage): boolean {
     if (!config.requireApiToken) return true;
     return request.headers.authorization === `Bearer ${config.apiToken}`;
@@ -223,8 +262,15 @@ export class VurqenApp {
   private allowRequest(request: IncomingMessage): boolean {
     const key = request.socket.remoteAddress ?? "unknown";
     const now = Date.now();
+    if (now - this.lastRateLimitCleanup >= RATE_LIMIT_WINDOW_MS) {
+      for (const [address, entry] of this.requestCounts) {
+        if (now - entry.startedAt >= RATE_LIMIT_WINDOW_MS) this.requestCounts.delete(address);
+      }
+      this.lastRateLimitCleanup = now;
+    }
     const current = this.requestCounts.get(key);
     if (!current || now - current.startedAt >= RATE_LIMIT_WINDOW_MS) {
+      if (!current && this.requestCounts.size >= RATE_LIMIT_MAX_CLIENTS) return false;
       this.requestCounts.set(key, { startedAt: now, count: 1 });
       return true;
     }
@@ -259,6 +305,10 @@ export class VurqenApp {
   }
 
   private async preflight(response: ServerResponse, runId: string): Promise<void> {
+    return this.withRunLock(runId, () => this.preflightUnlocked(response, runId));
+  }
+
+  private async preflightUnlocked(response: ServerResponse, runId: string): Promise<void> {
     const run = await this.store.getRun(runId);
     if (!run) {
       this.send(response, 404, { error: "Run not found" });
@@ -271,33 +321,8 @@ export class VurqenApp {
     this.send(response, 200, { run: await this.store.getRun(runId), provider: provider.name, mode: run.mode, checks });
   }
 
-  private async createIntent(request: IncomingMessage, response: ServerResponse, runId: string): Promise<void> {
-    const run = await this.store.getRun(runId);
-    if (!run) {
-      this.send(response, 404, { error: "Run not found" });
-      return;
-    }
-    if (await this.store.getIntentForRun(runId)) {
-      this.send(response, 409, { error: "Run already has an intent" });
-      return;
-    }
-
-    const input = IntentInputSchema.parse(await readJson(request));
-    const { submit, ...intentInput } = input;
-    const intent = IntentSchema.parse({
-      ...intentInput,
-      id: id("intent"),
-      runId,
-      provider: run.provider,
-      mode: run.mode,
-      clientOrderId: input.clientOrderId ?? clientOrderId(),
-      createdAt: new Date().toISOString(),
-    });
-    await this.store.addIntent(intent);
-    await this.store.setRunStatus(runId, "INTENT_RECORDED", { intentId: intent.id });
-
-    const provider = this.providerFor(run.provider);
-    const observations = [];
+  private async captureIntentObservations(runId: string, intent: Intent, provider: ExchangeProvider): Promise<Awaited<ReturnType<FileStore["addObservation"]>>[]> {
+    const observations: Awaited<ReturnType<FileStore["addObservation"]>>[] = [];
     try {
       const market = await provider.captureMarketObservation(intent.symbol);
       observations.push(
@@ -357,31 +382,96 @@ export class VurqenApp {
         }),
       );
     }
+    return observations;
+  }
+
+  private async createIntent(request: IncomingMessage, response: ServerResponse, runId: string): Promise<void> {
+    return this.withRunLock(runId, () => this.createIntentUnlocked(request, response, runId));
+  }
+
+  private async createIntentUnlocked(request: IncomingMessage, response: ServerResponse, runId: string): Promise<void> {
+    const run = await this.store.getRun(runId);
+    if (!run) {
+      this.send(response, 404, { error: "Run not found" });
+      return;
+    }
+    if (await this.store.getIntentForRun(runId)) {
+      this.send(response, 409, { error: "Run already has an intent" });
+      return;
+    }
+
+    const input = IntentInputSchema.parse(await readJson(request));
+    const { submit, ...intentInput } = input;
+    const intent = IntentSchema.parse({
+      ...intentInput,
+      id: id("intent"),
+      runId,
+      provider: run.provider,
+      mode: run.mode,
+      clientOrderId: input.clientOrderId ?? clientOrderId(),
+      createdAt: new Date().toISOString(),
+    });
+    await this.store.addIntent(intent);
+    await this.store.setRunStatus(runId, "INTENT_RECORDED", { intentId: intent.id });
+
+    const provider = this.providerFor(run.provider);
+    const observations = run.mode === "replay" ? [] : await this.captureIntentObservations(runId, intent, provider);
 
     let submission: unknown;
     if (submit) {
-      if (run.mode !== "paper") throw new Error("Paper order submission requires paper mode");
-      const result = await provider.submitPaperOrder(intent);
-      submission = result.raw;
-      observations.push(
-        await this.store.addObservation({
-          id: id("obs"),
-          runId,
-          source: "REST",
-          eventType: "ORDER_SUBMITTED",
-          receivedAt: new Date().toISOString(),
-          payloadHash: digest(result.raw),
-          payload: result.raw,
-          relatedIntentId: intent.id,
-        }),
-      );
-      await this.store.setRunStatus(runId, "OBSERVING");
+      if (run.mode !== "paper") {
+        this.send(response, 400, { error: "Paper order submission requires paper mode" });
+        return;
+      }
+      try {
+        const result = await provider.submitPaperOrder(intent);
+        submission = result.raw;
+        observations.push(
+          await this.store.addObservation({
+            id: id("obs"),
+            runId,
+            source: "REST",
+            eventType: "ORDER_SUBMITTED",
+            receivedAt: new Date().toISOString(),
+            payloadHash: digest(result.raw),
+            payload: result.raw,
+            relatedIntentId: intent.id,
+          }),
+        );
+        await this.store.setRunStatus(runId, "OBSERVING");
+      } catch (error) {
+        const detail = safeError(error);
+        observations.push(
+          await this.store.addObservation({
+            id: id("obs"),
+            runId,
+            source: "REST",
+            eventType: "ORDER_SUBMISSION_ERROR",
+            receivedAt: new Date().toISOString(),
+            payloadHash: digest({ error: detail }),
+            payload: { error: detail },
+            relatedIntentId: intent.id,
+          }),
+        );
+        await this.store.setRunStatus(runId, "UNKNOWN_BLOCKED");
+        this.send(response, 502, {
+          run: await this.store.getRun(runId),
+          intent,
+          observations,
+          error: "Order submission outcome is unknown. Reconcile before retrying.",
+        });
+        return;
+      }
     }
 
     this.send(response, 201, { run: await this.store.getRun(runId), intent, observations, submission });
   }
 
   private async applyFault(request: IncomingMessage, response: ServerResponse, runId: string): Promise<void> {
+    return this.withRunLock(runId, () => this.applyFaultUnlocked(request, response, runId));
+  }
+
+  private async applyFaultUnlocked(request: IncomingMessage, response: ServerResponse, runId: string): Promise<void> {
     const run = await this.store.getRun(runId);
     if (!run) {
       this.send(response, 404, { error: "Run not found" });
@@ -393,6 +483,10 @@ export class VurqenApp {
   }
 
   private async addObservation(request: IncomingMessage, response: ServerResponse, runId: string): Promise<void> {
+    return this.withRunLock(runId, () => this.addObservationUnlocked(request, response, runId));
+  }
+
+  private async addObservationUnlocked(request: IncomingMessage, response: ServerResponse, runId: string): Promise<void> {
     const run = await this.store.getRun(runId);
     if (!run) {
       this.send(response, 404, { error: "Run not found" });
@@ -416,6 +510,10 @@ export class VurqenApp {
   }
 
   private async reconcile(response: ServerResponse, runId: string): Promise<void> {
+    return this.withRunLock(runId, () => this.reconcileUnlocked(response, runId));
+  }
+
+  private async reconcileUnlocked(response: ServerResponse, runId: string): Promise<void> {
     const run = await this.store.getRun(runId);
     if (!run) {
       this.send(response, 404, { error: "Run not found" });
