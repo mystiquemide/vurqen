@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { buildCanonical, encodeQueryValues, validateParams } from "../src/providers/bingx-auth";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildCanonical, encodeQueryValues, fetchSigned, validateParams } from "../src/providers/bingx-auth";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("BingX authentication helpers", () => {
   it("sorts canonical parameters in ASCII order", () => {
@@ -16,5 +20,14 @@ describe("BingX authentication helpers", () => {
 
   it("rejects signed parameter injection characters", () => {
     expect(() => validateParams({ symbol: "BTC-USDT&side=SELL" })).toThrow(/parameter injection/i);
+  });
+
+  it("rejects unsuccessful HTTP responses even when the body code is zero", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ code: 0, msg: "server failure" }), { status: 500 })),
+    );
+
+    await expect(fetchSigned("prod-vst", "key", "secret", "GET", "/test")).rejects.toThrow(/HTTP 500/);
   });
 });

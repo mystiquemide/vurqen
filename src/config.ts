@@ -23,6 +23,43 @@ function aiProvider(value: string | undefined): AiProviderName {
   return "gemini";
 }
 
+function port(value: string | undefined): number {
+  const parsed = Number(value ?? 8787);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65_535) {
+    throw new Error("PORT must be an integer between 1 and 65535");
+  }
+  return parsed;
+}
+
+function baseUrl(value: string | undefined): string {
+  const raw = nonEmpty(value) ?? "https://api-contract.weex.com";
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("WEEX_BASE_URL must be a valid HTTPS URL");
+  }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error("WEEX_BASE_URL must be a valid HTTPS URL without credentials or query parameters");
+  }
+  return parsed.toString().replace(/\/+$/, "");
+}
+
+function corsOrigin(value: string | undefined): string | undefined {
+  const raw = nonEmpty(value);
+  if (!raw) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("VURQEN_CORS_ORIGIN must be an absolute HTTP or HTTPS origin");
+  }
+  if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash) {
+    throw new Error("VURQEN_CORS_ORIGIN must be an absolute HTTP or HTTPS origin without credentials or a path");
+  }
+  return parsed.origin;
+}
+
 const bingxApiKey = nonEmpty(process.env.BINGX_API_KEY);
 const bingxSecretKey = nonEmpty(process.env.BINGX_SECRET_KEY);
 const weexApiKey = nonEmpty(process.env.WEEX_API_KEY);
@@ -33,9 +70,10 @@ const geminiKey = nonEmpty(process.env.GEMINI_API_KEY) ?? (aiProvider(process.en
 const groqKey = nonEmpty(process.env.GROQ_API_KEY) ?? (aiProvider(process.env.AI_PROVIDER) === "groq" ? genericAiKey : undefined);
 
 export const config = {
-  port: Number(process.env.PORT ?? 8787),
+  port: port(process.env.PORT),
   apiToken: nonEmpty(process.env.VURQEN_API_TOKEN),
   requireApiToken: process.env.NODE_ENV === "production" || Boolean(nonEmpty(process.env.VURQEN_API_TOKEN)),
+  corsOrigin: corsOrigin(process.env.VURQEN_CORS_ORIGIN),
   mode: runMode(process.env.VURQEN_MODE),
   dataDir: path.resolve(process.cwd(), process.env.VURQEN_DATA_DIR ?? "./data"),
   provider: (bingxApiKey && bingxSecretKey ? "bingx" : "weex") as ProviderName,
@@ -48,7 +86,7 @@ export const config = {
     apiKey: weexApiKey,
     secretKey: weexSecretKey,
     passphrase: weexPassphrase,
-    baseUrl: process.env.WEEX_BASE_URL ?? "https://api-contract.weex.com",
+    baseUrl: baseUrl(process.env.WEEX_BASE_URL),
   },
   ai: {
     provider: aiProvider(process.env.AI_PROVIDER),
@@ -72,6 +110,7 @@ export function publicConfig() {
     mode: config.mode,
     aiProvider: config.ai.provider,
     aiModel: config.ai.model,
+    aiConfigured: Boolean(config.ai.geminiKey || config.ai.groqKey),
     bingxEnvironment: config.bingx.environment,
     bingxConfigured: hasBingxCredentials(),
     weexConfigured: hasWeexCredentials(),
