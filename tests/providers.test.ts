@@ -107,6 +107,15 @@ describe("BingX provider", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it("does not hide direct order authentication failures behind history", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ code: 100001, msg: "Invalid API-key" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new BingxProvider({ apiKey: "test-api", secretKey: "test-secret", environment: "prod-vst" });
+
+    await expect(provider.getOrderSnapshot(intent)).rejects.toThrow(/BingX error 100001/);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("unwraps the live VST order response shape", async () => {
     const fetchMock = vi.fn(async () =>
       new Response(

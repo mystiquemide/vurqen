@@ -54,6 +54,12 @@ async function main(): Promise<void> {
       body: "{}",
     });
     console.log(`  verdict=${reconciled.reconciliation.verdict} actions=${reconciled.agentActions.length} ai=${reconciled.aiExplanation ? "present" : "unavailable"}`);
+    if (!(["UNKNOWN_BLOCKED", "PROVIDER_UNAVAILABLE"] as string[]).includes(reconciled.reconciliation.verdict)) {
+      throw new Error("Smoke run did not reach a safe unresolved verdict");
+    }
+    if (!reconciled.incident?.recommendedAction?.toLowerCase().includes("do not retry")) {
+      throw new Error("Smoke run did not preserve the no-retry recommendation");
+    }
 
     const incidentId = reconciled.incident?.id as string | undefined;
     if (!incidentId) throw new Error("Smoke run did not create an incident");

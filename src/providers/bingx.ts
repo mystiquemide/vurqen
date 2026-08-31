@@ -23,6 +23,12 @@ function safeError(error: unknown): string {
   return "Unknown provider error";
 }
 
+function canFallbackToHistory(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return message.includes("http 404") || message.includes("not found") || message.includes("does not exist") || message.includes("unsupported") || message.includes("unknown endpoint");
+}
+
 function orderType(intent: Intent): "MARKET" | "LIMIT" {
   return intent.orderType;
 }
@@ -196,8 +202,9 @@ export class BingxProvider implements ExchangeProvider {
       });
       const snapshot = toSnapshot(direct);
       if (snapshot) return snapshot;
-    } catch {
-      // Fall back to the history endpoint for provider versions without the single-order response.
+    } catch (error) {
+      // Fall back only when the provider says the direct endpoint or order is unavailable.
+      if (!canFallbackToHistory(error)) throw error;
     }
 
     const data = await this.getOrderHistory(intent.symbol);

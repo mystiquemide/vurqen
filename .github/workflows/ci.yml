@@ -16,3 +16,11 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm audit --audit-level=moderate
+      - run: npm ci --prefix web
+      - run: npm run typecheck --prefix web
+      - run: npm run build --prefix web
+      - run: npm audit --audit-level=moderate --prefix web
+      - run: |
+          WEB_PORT=4173 node web/server.mjs > "$RUNNER_TEMP/vurqen-web.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/vurqen-web.pid"
+      - run: npm run smoke --prefix web
