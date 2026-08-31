@@ -104,11 +104,13 @@ export class AgentController {
     if (!intent) throw new Error(`Run ${runId} has no intent`);
 
     const existingReconciliation = await this.store.getReconciliation(runId);
-    if (existingReconciliation) {
+    if (existingReconciliation && existingReconciliation.verdict !== "UNKNOWN_BLOCKED" && existingReconciliation.verdict !== "PROVIDER_UNAVAILABLE") {
+      if (existingReconciliation.verdict === "RECONCILED") await this.store.clearAiExplanation(runId);
       return this.finish(runId, intent, existingReconciliation, await this.store.getIncidentForRun(runId));
     }
 
     await this.store.setRunStatus(runId, "RECONCILING");
+    await this.store.clearAiExplanation(runId);
     const beforeObservations = await this.store.getObservations(runId);
     const needsProviderLookup = run.mode !== "replay" && (beforeObservations.some((observation) => observation.faultType) || beforeObservations.length === 0);
     const lookupAction = action(
@@ -188,6 +190,7 @@ export class AgentController {
     const result = reconcileOrder(intent, afterLookup, providerSnapshot);
     await this.store.addReconciliation(result.reconciliation);
     if (result.incident) await this.store.addIncident(result.incident);
+    else await this.store.clearIncidentForRun(runId);
 
     const status = this.statusFor(result.verdict);
     await this.store.setRunStatus(runId, status);

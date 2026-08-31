@@ -192,7 +192,9 @@ export class FileStore {
   async addReconciliation(reconciliation: Reconciliation): Promise<Reconciliation> {
     return this.mutate((state) => {
       const validated = ReconciliationSchema.parse(reconciliation);
-      state.reconciliations.push(validated);
+      const existingIndex = state.reconciliations.findIndex((item) => item.runId === validated.runId);
+      if (existingIndex >= 0) state.reconciliations[existingIndex] = validated;
+      else state.reconciliations.push(validated);
       return validated;
     });
   }
@@ -205,7 +207,9 @@ export class FileStore {
   async addIncident(incident: Incident): Promise<Incident> {
     return this.mutate((state) => {
       const validated = IncidentSchema.parse(incident);
-      state.incidents.push(validated);
+      const existingIndex = state.incidents.findIndex((item) => item.runId === validated.runId);
+      if (existingIndex >= 0) state.incidents[existingIndex] = validated;
+      else state.incidents.push(validated);
       return validated;
     });
   }
@@ -213,6 +217,12 @@ export class FileStore {
   async getIncidentForRun(runId: string): Promise<Incident | undefined> {
     const state = await this.load();
     return state.incidents.find((incident) => incident.runId === runId);
+  }
+
+  async clearIncidentForRun(runId: string): Promise<void> {
+    await this.mutate((state) => {
+      state.incidents = state.incidents.filter((incident) => incident.runId !== runId);
+    });
   }
 
   async getIncident(incidentId: string): Promise<Incident | undefined> {
@@ -237,6 +247,12 @@ export class FileStore {
     await this.mutate((state) => {
       state.aiExplanations = state.aiExplanations.filter((item) => item.runId !== runId);
       state.aiExplanations.push({ runId, value });
+    });
+  }
+
+  async clearAiExplanation(runId: string): Promise<void> {
+    await this.mutate((state) => {
+      state.aiExplanations = state.aiExplanations.filter((item) => item.runId !== runId);
     });
   }
 

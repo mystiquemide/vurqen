@@ -169,7 +169,15 @@ describe("Vurqen HTTP API", () => {
     const app = new VurqenApp({
       store: new FileStore(directory),
       providers: { bingx: provider, weex: provider },
-      explainer: undefined,
+      explainer: {
+        name: "gemini",
+        explain: async () => ({
+          headline: "Unknown state",
+          explanation: "The provider state is not available yet.",
+          nextAction: "Do not retry.",
+          evidenceIds: [],
+        }),
+      },
     });
     const base = await start(app);
     const created = await jsonRequest(base, "/api/runs", {
@@ -190,6 +198,7 @@ describe("Vurqen HTTP API", () => {
           symbol: "BTC-USDT",
           clientOrderId: intent.body.intent.clientOrderId,
           side: "BUY",
+          positionSide: "LONG",
           orderType: "MARKET",
           status: "FILLED",
           originalQuantity: "0.001",
@@ -260,6 +269,7 @@ describe("Vurqen HTTP API", () => {
       orderType: "MARKET",
       status: "FILLED",
       originalQuantity: "0.001",
+      positionSide: "LONG",
     };
 
     const responses = await Promise.all([
@@ -303,5 +313,53 @@ describe("Vurqen HTTP API", () => {
     expect(response.response.status).toBe(502);
     expect(state.runs[0]?.status).toBe("UNKNOWN_BLOCKED");
     expect(state.observations.map((item) => item.eventType)).toContain("ORDER_SUBMISSION_ERROR");
+  });
+
+  it("retries authoritative lookup after an unknown reconciliation", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "vurqen-app-"));
+    directories.push(directory);
+    const provider = new FakeProvider();
+    const app = new VurqenApp({
+      store: new FileStore(directory),
+      providers: { bingx: provider, weex: provider },
+      explainer: {
+        name: "gemini",
+        explain: async () => ({
+          headline: "Unknown state",
+          explanation: "The provider state is not available yet.",
+          nextAction: "Do not retry.",
+          evidenceIds: [],
+        }),
+      },
+    });
+    const base = await start(app);
+    const created = await jsonRequest(base, "/api/runs", {
+      method: "POST",
+      body: JSON.stringify({ provider: "bingx", mode: "read_only" }),
+    });
+    const runId = created.body.run.id as string;
+    const intent = await jsonRequest(base, `/api/runs/${runId}/intents`, {
+      method: "POST",
+      body: JSON.stringify({ symbol: "BTC-USDT", side: "BUY", orderType: "MARKET", quantity: "0.001" }),
+    });
+
+    const first = await jsonRequest(base, `/api/runs/${runId}/reconcile`, { method: "POST", body: "{}" });
+    provider.snapshot = {
+      clientOrderId: intent.body.intent.clientOrderId,
+      symbol: "BTC-USDT",
+      side: "BUY",
+      orderType: "MARKET",
+      status: "FILLED",
+      originalQuantity: "0.001",
+      positionSide: "LONG",
+    };
+    const second = await jsonRequest(base, `/api/runs/${runId}/reconcile`, { method: "POST", body: "{}" });
+    const state = JSON.parse(await readFile(app.store.path, "utf8")) as { reconciliations: unknown[]; incidents: unknown[] };
+
+    expect(first.body.reconciliation.verdict).toBe("UNKNOWN_BLOCKED");
+    expect(second.body.reconciliation.verdict).toBe("RECONCILED");
+    expect(second.body.aiExplanation).toBeUndefined();
+    expect(state.reconciliations).toHaveLength(1);
+    expect(state.incidents).toHaveLength(0);
   });
 });
