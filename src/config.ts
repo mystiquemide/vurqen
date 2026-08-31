@@ -14,13 +14,21 @@ function nonEmpty(value: string | undefined): string | undefined {
 }
 
 function runMode(value: string | undefined): RunMode {
+  if (value === undefined || value === "paper") return "paper";
   if (value === "read_only" || value === "replay") return value;
-  return "paper";
+  throw new Error("VURQEN_MODE must be paper, read_only, or replay");
 }
 
 function aiProvider(value: string | undefined): AiProviderName {
+  if (value === undefined || value === "gemini") return "gemini";
   if (value === "groq" || value === "none") return value;
-  return "gemini";
+  throw new Error("AI_PROVIDER must be gemini, groq, or none");
+}
+
+function bingxEnvironment(value: string | undefined): "prod-vst" | "prod-live" {
+  if (value === undefined || value === "prod-vst") return "prod-vst";
+  if (value === "prod-live") return "prod-live";
+  throw new Error("BINGX_ENV must be prod-vst or prod-live");
 }
 
 function port(value: string | undefined): number {
@@ -75,12 +83,12 @@ export const config = {
   requireApiToken: process.env.NODE_ENV === "production" || Boolean(nonEmpty(process.env.VURQEN_API_TOKEN)),
   corsOrigin: corsOrigin(process.env.VURQEN_CORS_ORIGIN),
   mode: runMode(process.env.VURQEN_MODE),
-  dataDir: path.resolve(process.cwd(), process.env.VURQEN_DATA_DIR ?? "./data"),
+  dataDir: path.resolve(process.cwd(), nonEmpty(process.env.VURQEN_DATA_DIR) ?? "./data"),
   provider: (bingxApiKey && bingxSecretKey ? "bingx" : "weex") as ProviderName,
   bingx: {
     apiKey: bingxApiKey,
     secretKey: bingxSecretKey,
-    environment: process.env.BINGX_ENV === "prod-live" ? "prod-live" : "prod-vst",
+    environment: bingxEnvironment(process.env.BINGX_ENV),
   },
   weex: {
     apiKey: weexApiKey,
@@ -90,7 +98,7 @@ export const config = {
   },
   ai: {
     provider: aiProvider(process.env.AI_PROVIDER),
-    model: process.env.AI_MODEL ?? "gemini-2.5-flash",
+    model: nonEmpty(process.env.AI_MODEL) ?? "gemini-2.5-flash",
     geminiKey,
     groqKey,
   },
