@@ -7,6 +7,7 @@ data/
 !.env.example
 *.log
 *.swp
+*.tsbuildinfo
 
 # Internal planning and agent workspace files
 AGENTS.md
