@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+data/
+.env
+.env.*
+!.env.example
+*.log
+*.swp
+
+# Internal planning and agent workspace files
+AGENTS.md
+memory.md
+docs/
