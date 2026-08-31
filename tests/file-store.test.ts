@@ -29,6 +29,7 @@ describe("FileStore", () => {
       side: "BUY",
       orderType: "LIMIT",
       quantity: "0.001",
+      price: "60000",
       clientOrderId: "vq_store",
       createdAt: "2026-08-30T00:00:00.000Z",
     });

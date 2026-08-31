@@ -63,7 +63,7 @@ export async function fetchWeex(options: WeexRequestOptions): Promise<unknown> {
     signal: AbortSignal.timeout(10000),
   });
   const raw = await response.text();
-  let parsed: any;
+  let parsed: unknown;
   try {
     parsed = JSONBigParse.parse(raw);
   } catch {
@@ -71,10 +71,15 @@ export async function fetchWeex(options: WeexRequestOptions): Promise<unknown> {
   }
 
   if (!response.ok) {
-    throw new Error(`WEEX HTTP ${response.status}: ${String(parsed?.msg ?? parsed?.errorMessage ?? "request failed").slice(0, 300)}`);
+    const record = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : undefined;
+    throw new Error(`WEEX HTTP ${response.status}: ${String(record?.msg ?? record?.errorMessage ?? "request failed").slice(0, 300)}`);
   }
-  if (typeof parsed?.code === "number" && parsed.code !== 0) {
-    throw new Error(`WEEX error ${parsed.code}: ${String(parsed.msg ?? "request failed").slice(0, 300)}`);
+  const record = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : undefined;
+  if (record?.success === false) {
+    throw new Error(`WEEX order rejected ${String(record.errorCode ?? "unknown")}: ${String(record.errorMessage ?? "request failed").slice(0, 300)}`);
+  }
+  if (typeof record?.code === "number" && record.code !== 0) {
+    throw new Error(`WEEX error ${record.code}: ${String(record.msg ?? "request failed").slice(0, 300)}`);
   }
   return parsed;
 }

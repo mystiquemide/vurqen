@@ -4,7 +4,7 @@ declare module "json-bigint" {
   }
 
   interface JsonBigParser {
-    parse(text: string): any;
+    parse(text: string): unknown;
     stringify(value: unknown): string;
   }
 

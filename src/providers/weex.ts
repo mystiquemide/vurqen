@@ -44,7 +44,11 @@ function asString(value: string | number | undefined): string | undefined {
   return value === undefined ? undefined : String(value);
 }
 
-function snapshotFrom(raw: unknown, intent: Intent): OrderSnapshot | undefined {
+function defaultPositionSide(intent: Intent): "LONG" | "SHORT" {
+  return intent.positionSide;
+}
+
+function snapshotFrom(raw: unknown): OrderSnapshot | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const candidate = dataFrom(raw);
   if (!candidate || typeof candidate !== "object") return undefined;
@@ -57,14 +61,16 @@ function snapshotFrom(raw: unknown, intent: Intent): OrderSnapshot | undefined {
     : "UNKNOWN";
   const side = record.side === "BUY" || record.side === "SELL" ? record.side : undefined;
   const orderType = record.type === "MARKET" || record.type === "LIMIT" ? record.type : undefined;
+  const positionSide = record.positionSide === "LONG" || record.positionSide === "SHORT" ? record.positionSide : undefined;
   const providerOrderId = asString(record.orderId);
 
   return {
     providerOrderId,
     clientOrderId: record.clientOrderId,
-    symbol: intent.symbol,
+    symbol: record.symbol.toUpperCase(),
     side,
     orderType,
+    positionSide,
     status: status as OrderSnapshot["status"],
     originalQuantity: asString(record.origQty),
     executedQuantity: asString(record.executedQty),
@@ -139,13 +145,13 @@ export class WeexProvider implements ExchangeProvider {
     const checks: PreflightCheck[] = [
       {
         name: "provider_environment",
-        status: mode === "paper" ? "PASS" : "WARN",
-        detail: "WEEX provider is configured for paper endpoints.",
+        status: "PASS",
+        detail: `WEEX provider is configured for paper endpoints in ${mode} mode.`,
         source: "configuration",
       },
       {
         name: "credentials",
-        status: this.configured ? "PASS" : "WARN",
+        status: this.configured ? "PASS" : "FAIL",
         detail: this.configured ? "WEEX credentials are configured server-side." : "WEEX credentials are not available yet.",
         source: "configuration",
       },
@@ -197,23 +203,23 @@ export class WeexProvider implements ExchangeProvider {
       (order) => typeof order === "object" && order !== null &&
         String((order as Record<string, unknown>).clientOrderId ?? "").toLowerCase() === intent.clientOrderId.toLowerCase(),
     );
-    return snapshotFrom(matching, intent);
+    return snapshotFrom(matching);
   }
 
   async validateOrder(intent: Intent): Promise<ProviderOrderResult> {
     if (intent.mode !== "paper") {
       throw new Error("WEEX order validation is available only in paper mode");
     }
-    const raw = await this.request("POST", "/capi/v3/sim/order", undefined, {
-      symbol: weexSymbol(intent.symbol),
-      side: intent.side,
-      positionSide: "LONG",
-      type: intent.orderType,
-      ...(intent.orderType === "LIMIT" ? { timeInForce: "GTC", price: intent.price } : {}),
-      quantity: intent.quantity,
-      newClientOrderId: intent.clientOrderId,
-    });
-    return { raw, snapshot: snapshotFrom(raw, intent) };
+    const exchangeInfo = await this.getExchangeInfo(intent.symbol);
+    return {
+      raw: {
+        validated: true,
+        exchangeInfo,
+        symbol: weexSymbol(intent.symbol),
+        side: intent.side,
+        orderType: intent.orderType,
+      },
+    };
   }
 
   async submitPaperOrder(intent: Intent): Promise<ProviderOrderResult> {
@@ -223,13 +229,13 @@ export class WeexProvider implements ExchangeProvider {
     const raw = await this.request("POST", "/capi/v3/sim/order", undefined, {
       symbol: weexSymbol(intent.symbol),
       side: intent.side,
-      positionSide: "LONG",
+      positionSide: defaultPositionSide(intent),
       type: intent.orderType,
       ...(intent.orderType === "LIMIT" ? { timeInForce: "GTC", price: intent.price } : {}),
       quantity: intent.quantity,
       newClientOrderId: intent.clientOrderId,
     });
-    return { raw, snapshot: snapshotFrom(raw, intent) };
+    return { raw, snapshot: snapshotFrom(raw) };
   }
 
   async captureMarketObservation(symbol: string): Promise<unknown> {

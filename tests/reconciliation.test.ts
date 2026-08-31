@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { id } from "../src/core/ids";
 import { reconcileOrder } from "../src/core/reconciliation";
-import { Intent, IntentSchema, Observation, ObservationSchema, OrderSnapshot } from "../src/core/schemas";
+import { Intent, IntentInputSchema, IntentSchema, Observation, ObservationSchema, OrderSnapshot } from "../src/core/schemas";
 
 function intent(overrides: Partial<Intent> = {}): Intent {
   return IntentSchema.parse({
@@ -87,6 +87,39 @@ describe("reconcileOrder", () => {
 
     expect(result.verdict).toBe("UNKNOWN_BLOCKED");
     expect(result.reconciliation.mismatchedFields).toContain("symbol");
+  });
+
+  it("blocks a limit price mismatch", () => {
+    const result = reconcileOrder(
+      intent(),
+      [observation()],
+      snapshot({ price: "61000" }),
+      "2026-08-30T00:00:02.000Z",
+    );
+
+    expect(result.verdict).toBe("UNKNOWN_BLOCKED");
+    expect(result.reconciliation.mismatchedFields).toContain("price");
+  });
+
+  it("blocks a WEEX position-side mismatch", () => {
+    const result = reconcileOrder(
+      intent({ provider: "weex" }),
+      [observation()],
+      snapshot({ positionSide: "SHORT" }),
+      "2026-08-30T00:00:02.000Z",
+    );
+
+    expect(result.verdict).toBe("UNKNOWN_BLOCKED");
+    expect(result.reconciliation.mismatchedFields).toContain("positionSide");
+  });
+
+  it("rejects non-positive quantities and incomplete limit orders", () => {
+    const base = { symbol: "BTC-USDT", side: "BUY" as const, orderType: "LIMIT" as const };
+
+    expect(IntentInputSchema.safeParse({ ...base, quantity: "0", price: "60000" }).success).toBe(false);
+    expect(IntentInputSchema.safeParse({ ...base, quantity: "0.001" }).success).toBe(false);
+    expect(IntentInputSchema.safeParse({ ...base, quantity: "0.001", price: "0" }).success).toBe(false);
+    expect(IntentInputSchema.safeParse({ ...base, quantity: "0.001", price: "60000", clientOrderId: "x".repeat(37) }).success).toBe(false);
   });
 
   it("records controlled duplicate faults while accepting matching provider state", () => {

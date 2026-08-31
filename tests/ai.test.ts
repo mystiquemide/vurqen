@@ -11,6 +11,7 @@ const intent = IntentSchema.parse({
   side: "BUY",
   orderType: "LIMIT",
   quantity: "0.001",
+  price: "60000",
   clientOrderId: "vq_test_order",
   createdAt: "2026-08-30T00:00:00.000Z",
 });

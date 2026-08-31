@@ -121,9 +121,20 @@ async function fetchSigned(
         signal: AbortSignal.timeout(10000),
       });
 
-      const json = JSONBigParse.parse(await res.text());
-      if (json.code !== 0) throw new Error(`BingX error ${json.code}: ${json.msg}`);
-      return json.data;
+      const raw = await res.text();
+      let json: unknown;
+      try {
+        json = JSONBigParse.parse(raw);
+      } catch {
+        throw new Error(`BingX returned non-JSON response with HTTP ${res.status}`);
+      }
+      const record = json && typeof json === "object" ? json as Record<string, unknown> : undefined;
+      if (!res.ok) {
+        throw new Error(`BingX HTTP ${res.status}: ${String(record?.msg ?? "request failed").slice(0, 300)}`);
+      }
+      if (typeof record?.code !== "number") throw new Error("BingX response did not include a numeric result code");
+      if (record.code !== 0) throw new Error(`BingX error ${record.code}: ${String(record.msg ?? "request failed").slice(0, 300)}`);
+      return record.data;
     } catch (e) {
       if (!isNetworkOrTimeout(e) || baseUrl === baseUrls[baseUrls.length - 1]) throw e;
     }

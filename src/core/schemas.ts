@@ -8,6 +8,7 @@ export type ProviderName = z.infer<typeof ProviderNameSchema>;
 
 export const OrderSideSchema = z.enum(["BUY", "SELL"]);
 export const OrderTypeSchema = z.enum(["MARKET", "LIMIT"]);
+export const PositionSideSchema = z.enum(["LONG", "SHORT"]);
 export const OrderStatusSchema = z.enum([
   "NEW",
   "PARTIALLY_FILLED",
@@ -62,15 +63,29 @@ export const CreateRunInputSchema = z.object({
   mode: RunModeSchema.optional(),
 });
 
-export const IntentInputSchema = z.object({
+const PositiveDecimalSchema = z.string()
+  .trim()
+  .regex(/^\d+(\.\d+)?$/, "must be a decimal number")
+  .refine((value) => /[1-9]/.test(value.replace(".", "")), "must be greater than zero");
+
+function validateIntent(value: { orderType: z.infer<typeof OrderTypeSchema>; price?: string }, context: z.RefinementCtx): void {
+  if (value.orderType === "LIMIT" && value.price === undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["price"], message: "limit orders require a price" });
+  }
+}
+
+const IntentFieldsSchema = z.object({
   symbol: z.string().trim().min(1).max(32).regex(/^[A-Za-z0-9_-]+$/),
   side: OrderSideSchema,
   orderType: OrderTypeSchema,
-  quantity: z.string().trim().regex(/^\d+(\.\d+)?$/),
-  price: z.string().trim().regex(/^\d+(\.\d+)?$/).optional(),
-  clientOrderId: z.string().trim().min(1).max(40).regex(/^[A-Za-z0-9._-]+$/).optional(),
+  positionSide: PositionSideSchema.default("LONG"),
+  quantity: PositiveDecimalSchema,
+  price: PositiveDecimalSchema.optional(),
+  clientOrderId: z.string().trim().min(1).max(36).regex(/^[A-Za-z0-9._-]+$/).optional(),
   submit: z.boolean().optional().default(false),
 });
+
+export const IntentInputSchema = IntentFieldsSchema.superRefine(validateIntent);
 export type IntentInput = z.infer<typeof IntentInputSchema>;
 
 export const FaultInputSchema = z.object({
@@ -103,14 +118,14 @@ export const PreflightResultSchema = z.object({
 });
 export type PreflightResult = z.infer<typeof PreflightResultSchema>;
 
-export const IntentSchema = IntentInputSchema.omit({ submit: true }).extend({
+export const IntentSchema = IntentFieldsSchema.omit({ submit: true }).extend({
   id: z.string(),
   runId: z.string(),
   provider: ProviderNameSchema,
   mode: RunModeSchema,
-  clientOrderId: z.string(),
+  clientOrderId: z.string().trim().min(1).max(36).regex(/^[A-Za-z0-9._-]+$/),
   createdAt: z.string(),
-});
+}).superRefine(validateIntent);
 export type Intent = z.infer<typeof IntentSchema>;
 
 export const ObservationSchema = z.object({
@@ -133,6 +148,7 @@ export const OrderSnapshotSchema = z.object({
   clientOrderId: z.string().optional(),
   symbol: z.string(),
   side: OrderSideSchema.optional(),
+  positionSide: z.enum(["BOTH", "LONG", "SHORT"]).optional(),
   orderType: OrderTypeSchema.optional(),
   status: OrderStatusSchema,
   originalQuantity: z.string().optional(),

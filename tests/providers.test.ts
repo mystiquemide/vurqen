@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { IntentSchema } from "../src/core/schemas";
 import { BingxProvider } from "../src/providers/bingx";
+import { WeexProvider } from "../src/providers/weex";
 
 const intent = IntentSchema.parse({
   id: "intent_provider",
@@ -97,5 +98,44 @@ describe("BingX provider", () => {
     const result = await provider.validateOrder(intent);
 
     expect(result.snapshot).toMatchObject({ providerOrderId: "9007199254740993124", status: "NEW" });
+  });
+});
+
+describe("WEEX provider", () => {
+  it("fails credential preflight when private access is unavailable", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ symbols: [] }), { status: 200 })));
+    const provider = new WeexProvider({ baseUrl: "https://api-contract.weex.com" });
+
+    const checks = await provider.preflight("paper");
+
+    expect(checks.find((check) => check.name === "credentials")?.status).toBe("FAIL");
+  });
+
+  it("validates through public exchange information without placing an order", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.method).toBe("GET");
+      return new Response(JSON.stringify({ symbols: [] }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new WeexProvider({ apiKey: "test-api", secretKey: "test-secret", passphrase: "test-pass", baseUrl: "https://api-contract.weex.com" });
+    const weexIntent = IntentSchema.parse({ ...intent, provider: "weex" });
+
+    await expect(provider.validateOrder(weexIntent)).resolves.toMatchObject({ raw: { validated: true } });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("uses an explicit short hedge position for a sell paper order", async () => {
+    let body: Record<string, unknown> | undefined;
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ success: true, orderId: "702345678901234567", clientOrderId: "vq_provider" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new WeexProvider({ apiKey: "test-api", secretKey: "test-secret", passphrase: "test-pass", baseUrl: "https://api-contract.weex.com" });
+    const weexIntent = IntentSchema.parse({ ...intent, provider: "weex", side: "SELL", positionSide: "SHORT" });
+
+    await provider.submitPaperOrder(weexIntent);
+
+    expect(body?.positionSide).toBe("SHORT");
   });
 });

@@ -30,8 +30,12 @@ function normalizeNumber(value: string | undefined): string | undefined {
 }
 
 function sameNumber(left: string | undefined, right: string | undefined): boolean {
-  if (left === undefined || right === undefined) return true;
+  if (left === undefined || right === undefined) return false;
   return normalizeNumber(left) === normalizeNumber(right);
+}
+
+function canonicalSymbol(symbol: string): string {
+  return symbol.replaceAll("-", "").toUpperCase();
 }
 
 function canonicalStatus(status: OrderSnapshot["status"]): OrderSnapshot["status"] {
@@ -129,26 +133,54 @@ export function reconcileOrder(
   const snapshotStatus = canonicalStatus(providerSnapshot.status);
 
   const comparisons: Array<[string, boolean, string]> = [
-    ["symbol", providerSnapshot.symbol === intent.symbol, `Provider symbol ${providerSnapshot.symbol} matches intent ${intent.symbol}.`],
+    [
+      "symbol",
+      canonicalSymbol(providerSnapshot.symbol) === canonicalSymbol(intent.symbol),
+      `Provider symbol ${providerSnapshot.symbol} was compared with intent ${intent.symbol}.`,
+    ],
     [
       "clientOrderId",
-      !providerSnapshot.clientOrderId || providerSnapshot.clientOrderId.toLowerCase() === intent.clientOrderId.toLowerCase(),
+      providerSnapshot.clientOrderId?.toLowerCase() === intent.clientOrderId.toLowerCase(),
       providerSnapshot.clientOrderId
         ? `Provider client order ID ${providerSnapshot.clientOrderId} was compared with ${intent.clientOrderId}.`
-        : "Provider did not return a client order ID.",
+        : "Provider did not return the client order ID.",
     ],
-    ["side", !providerSnapshot.side || providerSnapshot.side === intent.side, "Order side is compatible with the intent."],
+    [
+      "side",
+      providerSnapshot.side === intent.side,
+      providerSnapshot.side ? "Order side was compared with the intent." : "Provider did not return the order side.",
+    ],
     [
       "orderType",
-      !providerSnapshot.orderType || providerSnapshot.orderType === intent.orderType,
-      "Order type is compatible with the intent.",
+      providerSnapshot.orderType === intent.orderType,
+      providerSnapshot.orderType ? "Order type was compared with the intent." : "Provider did not return the order type.",
     ],
     [
       "quantity",
       sameNumber(providerSnapshot.originalQuantity, intent.quantity),
-      "Provider quantity is compatible with the intent.",
+      providerSnapshot.originalQuantity
+        ? "Provider quantity was compared with the intent."
+        : "Provider did not return the original quantity.",
     ],
   ];
+
+  if (intent.orderType === "LIMIT") {
+    comparisons.push([
+      "price",
+      sameNumber(providerSnapshot.price, intent.price),
+      providerSnapshot.price ? "Provider price was compared with the intent." : "Provider did not return the limit price.",
+    ]);
+  }
+
+  if (intent.provider === "weex") {
+    comparisons.push([
+      "positionSide",
+      providerSnapshot.positionSide === intent.positionSide,
+      providerSnapshot.positionSide
+        ? "Provider position side was compared with the intent."
+        : "Provider did not return the position side.",
+    ]);
+  }
 
   for (const [name, passed, detail] of comparisons) {
     rules.push({ name: `match_${name}`, passed, detail });
