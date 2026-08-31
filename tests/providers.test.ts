@@ -27,6 +27,7 @@ describe("BingX provider", () => {
       const url = String(input);
       expect(url).toBe("https://open-api-vst.bingx.com/openApi/swap/v2/trade/order");
       expect(String(init?.body)).toContain("signature=");
+      expect(String(init?.body)).toContain("positionSide=LONG");
       expect(init?.method).toBe("POST");
       expect((init?.headers as Record<string, string>)["X-SOURCE-KEY"]).toBe("BX-AI-SKILL");
       return new Response(
@@ -69,6 +70,41 @@ describe("BingX provider", () => {
 
     await expect(provider.submitPaperOrder(intent)).rejects.toThrow(/prod-vst/);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("queries a single order before scanning order history", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      expect(url).toContain("/openApi/swap/v2/trade/order?");
+      expect(url).toContain("clientOrderId=vq_provider");
+      expect(init?.method).toBe("GET");
+      return new Response(
+        JSON.stringify({
+          code: 0,
+          msg: "",
+          data: {
+            orderID: "9007199254740993125",
+            symbol: "BTC-USDT",
+            side: "BUY",
+            positionSide: "LONG",
+            type: "LIMIT",
+            origQty: "0.001",
+            executedQty: "0",
+            price: "60000",
+            status: "NEW",
+            clientOrderId: "vq_provider",
+          },
+        }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new BingxProvider({ apiKey: "test-api", secretKey: "test-secret", environment: "prod-vst" });
+
+    const result = await provider.getOrderSnapshot(intent);
+
+    expect(result).toMatchObject({ providerOrderId: "9007199254740993125", status: "NEW", positionSide: "LONG" });
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("unwraps the live VST order response shape", async () => {

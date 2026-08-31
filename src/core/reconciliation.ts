@@ -172,7 +172,7 @@ export function reconcileOrder(
     ]);
   }
 
-  if (intent.provider === "weex") {
+  if (intent.provider === "weex" || intent.provider === "bingx") {
     comparisons.push([
       "positionSide",
       providerSnapshot.positionSide === intent.positionSide,

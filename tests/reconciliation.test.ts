@@ -45,6 +45,7 @@ function snapshot(overrides: Partial<OrderSnapshot> = {}): OrderSnapshot {
     originalQuantity: "0.001",
     executedQuantity: "0.001",
     price: "60000",
+    positionSide: "LONG",
     ...overrides,
   };
 }
@@ -101,9 +102,9 @@ describe("reconcileOrder", () => {
     expect(result.reconciliation.mismatchedFields).toContain("price");
   });
 
-  it("blocks a WEEX position-side mismatch", () => {
+  it("blocks a provider position-side mismatch", () => {
     const result = reconcileOrder(
-      intent({ provider: "weex" }),
+      intent({ provider: "bingx" }),
       [observation()],
       snapshot({ positionSide: "SHORT" }),
       "2026-08-30T00:00:02.000Z",

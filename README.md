@@ -70,7 +70,7 @@ Replay mode stays offline. Add a replay `ORDER_STATE` observation before reconci
 
 ## Provider integrations
 
-- BingX: VST balance, contract metadata, ticker, order history, signed paper-order submission, and bounded reconciliation.
+- BingX: VST balance, contract metadata, ticker, order history, signed paper-order submission, and bounded reconciliation. Orders use explicit hedge position sides, defaulting to `LONG`.
 - WEEX: V3 paper balance, positions, order history, exchange information, and signed paper-order submission. WEEX `positionSide` defaults to `LONG`; set `SHORT` for short-side hedge orders.
 - Gemini: structured incident explanations using `gemini-2.5-flash`.
 - Groq: optional explanation fallback.

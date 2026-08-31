@@ -43,18 +43,22 @@ function toSnapshot(raw: unknown): OrderSnapshot | undefined {
   const rawProviderOrderId = order.orderID !== undefined ? String(order.orderID) : order.orderId !== undefined ? String(order.orderId) : undefined;
   const providerOrderId = rawProviderOrderId || undefined;
   const status = order.status?.toUpperCase();
-  const normalizedStatus = status === "CANCELLED" ? "CANCELED" : status;
+  const normalizedStatus = status === "CANCELLED" ? "CANCELED" : status === "PENDING" ? "NEW" : status;
   const allowedStatuses = ["NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "EXPIRED", "REJECTED"] as const;
   const safeStatus = allowedStatuses.includes(normalizedStatus as (typeof allowedStatuses)[number])
     ? (normalizedStatus as (typeof allowedStatuses)[number])
     : "UNKNOWN";
   const asString = (value: string | number | undefined): string | undefined => value === undefined ? undefined : String(value);
+  const positionSide = order.positionSide === "BOTH" || order.positionSide === "LONG" || order.positionSide === "SHORT"
+    ? order.positionSide
+    : undefined;
 
   return {
     providerOrderId,
     clientOrderId: order.clientOrderId ?? order.clientOrderID,
     symbol: order.symbol,
     side: order.side === "BUY" || order.side === "SELL" ? order.side : undefined,
+    positionSide,
     orderType: order.type === "MARKET" || order.type === "LIMIT" ? order.type : undefined,
     status: safeStatus,
     originalQuantity: asString(order.origQty ?? order.quantity),
@@ -184,6 +188,18 @@ export class BingxProvider implements ExchangeProvider {
   }
 
   async getOrderSnapshot(intent: Intent): Promise<OrderSnapshot | undefined> {
+    try {
+      const direct = await this.request("GET", "/openApi/swap/v2/trade/order", {
+        symbol: intent.symbol,
+        clientOrderId: intent.clientOrderId,
+        recvWindow: 5000,
+      });
+      const snapshot = toSnapshot(direct);
+      if (snapshot) return snapshot;
+    } catch {
+      // Fall back to the history endpoint for provider versions without the single-order response.
+    }
+
     const data = await this.getOrderHistory(intent.symbol);
     const orders = BingxOrderSchema.array().parse(data);
     const matching = orders.find(
@@ -201,7 +217,7 @@ export class BingxProvider implements ExchangeProvider {
       "/openApi/swap/v2/trade/order/test",
       {
         clientOrderId: intent.clientOrderId,
-        positionSide: "BOTH",
+        positionSide: intent.positionSide,
         quantity: Number(intent.quantity),
         recvWindow: 5000,
         side: intent.side,
@@ -222,7 +238,7 @@ export class BingxProvider implements ExchangeProvider {
       "/openApi/swap/v2/trade/order",
       {
         clientOrderId: intent.clientOrderId,
-        positionSide: "BOTH",
+        positionSide: intent.positionSide,
         quantity: Number(intent.quantity),
         recvWindow: 5000,
         side: intent.side,
