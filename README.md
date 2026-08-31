@@ -1,88 +1,97 @@
 # Vurqen
 
-Evidence-first incident response for exchange-connected AI trading workflows.
-
-Vurqen records an order intent, checks provider state, detects uncertainty, blocks unsafe retries, and exports a receipt that explains what the exchange actually returned.
+Vurqen stops an exchange-connected agent from blindly retrying when the exchange cannot prove what happened, then exports the evidence.
 
 ## The proof run
 
+Vurqen records a canonical intent, captures provider observations, labels local faults, reconciles against authoritative order state, returns a deterministic verdict, and exports a receipt.
+
 ```text
-record intent -> capture provider evidence -> introduce a controlled fault
--> reconcile against order history -> block an unsafe retry -> export receipt.json
+intent -> observations -> controlled fault -> reconciliation -> verdict -> receipt
 ```
 
-The current backend runs against BingX VST simulated trading and supports a WEEX V3 adapter. It never requests withdrawal permission and never uses live funds by default.
+The product never requests withdrawal permission or uses live funds by default. `REPLAY` data is always labeled as replay data.
+
+## Screens
+
+![Preflight screen](web/public/screenshots/preflight.png)
+![Active run screen](web/public/screenshots/active-run.png)
+![Incident screen](web/public/screenshots/incident.png)
+![Receipt screen](web/public/screenshots/receipt.png)
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  User --> API[Vurqen API]
-  API --> Agent[Bounded agent controller]
+  User --> Web[Vite React web app]
+  Web --> API[Vurqen Node API]
+  API --> Controller[Bounded agent controller]
   API --> Engine[Deterministic reconciliation]
-  Agent --> Provider[BingX or WEEX adapter]
-  Engine --> Receipt[Append-only evidence receipt]
+  Controller --> Provider[BingX or WEEX adapter]
+  Engine --> Receipt[Evidence receipt]
   Provider --> Exchange[Paper or read-only exchange APIs]
 ```
 
-## Quick start
+The API owns run state, provider calls, verdicts, and receipts. The controller selects bounded diagnostic actions. The deterministic engine owns reconciliation. The AI layer can explain supplied evidence but cannot assign or override a verdict.
+
+## Run locally
 
 Requirements: Node.js 20 or newer.
 
 ```bash
 npm ci
 cp .env.example .env.local
-npm run build
-npm test
-```
-
-For a real provider smoke run, add BingX VST credentials to `.env.local` and run:
-
-```bash
-npm run smoke
-```
-
-The smoke flow makes read-only balance, contract, ticker, order-history, and WebSocket requests. It does not place an order.
-
-Run the API locally with:
-
-```bash
+npm run check
 npm run dev
 ```
 
-The default address is `http://localhost:8787`.
+The API listens on `http://localhost:8787`.
 
-Replay mode stays offline. Add a replay `ORDER_STATE` observation before reconciliation when you want to test a matching provider state. Include the order symbol, client ID, side, type, status, quantity, and limit price when applicable. WEEX replay states also need `positionSide`. The API blocks reconciliation when authoritative replay state is missing or incomplete.
+In a second terminal, run the frontend:
+
+```bash
+npm ci --prefix web
+VITE_API_PROXY=http://127.0.0.1:8787 npm run dev --prefix web
+```
+
+Open `http://localhost:5173`. Start at `/run/new`, choose a provider and mode, run preflight, record an intent, inspect evidence, reconcile, and download the receipt.
+
+For a protected production-style web process, build the frontend and run the same-origin proxy. Keep the API token in the server environment. It is never placed in the client bundle.
+
+```bash
+npm run build --prefix web
+VURQEN_API_URL=http://127.0.0.1:8787 WEB_PORT=4173 npm start --prefix web
+```
+
+Set the same `VURQEN_API_TOKEN` in the API and web proxy environments when `NODE_ENV=production`.
+
+## Provider proof
+
+- BingX VST: verified locally for balance, contract metadata, market ticker, WebSocket ticker, paper-order submission, and bounded order reconciliation.
+- WEEX V3: adapter support covers paper and read-only request shapes, signing, exchange information, balances, positions, order history, paper orders, and public WebSocket capture. A real WEEX paper run still requires provider credentials.
+- Replay: deterministic local observations and controlled faults for reproducible testing. Replay is never presented as live provider behavior.
+
+## Safety boundary
+
+Vurqen does not generate trading strategies, provide investment advice, custody funds, handle withdrawals, or submit live-money orders. An unresolved order cannot be retried as an order. Reconciliation may be run again to obtain fresh authoritative evidence.
+
+Provider credentials stay server-side. A production deployment must use HTTPS and protect private API routes with `VURQEN_API_TOKEN`. Evidence sent to the configured AI provider should not contain secrets.
 
 ## API
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/health` | Provider and model readiness |
+| GET | `/api/health` | Provider and model configuration summary |
 | POST | `/api/runs` | Create a paper, read-only, or replay run |
+| GET | `/api/runs/:runId` | Read a run and its evidence |
 | POST | `/api/runs/:runId/preflight` | Run provider checks |
-| POST | `/api/runs/:runId/intents` | Record an intent and capture market evidence |
-| POST | `/api/runs/:runId/faults` | Apply a labeled controlled fault |
+| POST | `/api/runs/:runId/intents` | Record an intent and capture observations |
+| POST | `/api/runs/:runId/observations` | Add a replay observation |
+| POST | `/api/runs/:runId/faults` | Apply a labeled local fault |
 | POST | `/api/runs/:runId/reconcile` | Run bounded diagnosis and reconciliation |
-| GET | `/api/runs/:runId/receipt.json` | Download the run receipt |
+| GET | `/api/runs/:runId/receipt.json` | Download a run receipt |
 | GET | `/api/incidents/:incidentId` | Inspect an incident and receipt |
 | GET | `/api/incidents/:incidentId/receipt.json` | Download an incident receipt |
-
-## Provider integrations
-
-- BingX: VST balance, contract metadata, ticker, order history, signed paper-order submission, and bounded reconciliation. Orders use explicit hedge position sides, defaulting to `LONG`.
-- WEEX: V3 paper balance, positions, order history, exchange information, and signed paper-order submission. WEEX `positionSide` defaults to `LONG`; set `SHORT` for short-side hedge orders.
-- Gemini: structured incident explanations using `gemini-2.5-flash`.
-- Groq: optional explanation fallback.
-
-Provider credentials stay on the server. Set `VURQEN_API_TOKEN` when exposing private routes outside a local environment.
-Browser access is disabled by default. Set `VURQEN_CORS_ORIGIN` to one trusted origin when a browser client is required.
-
-## Safety boundary
-
-Vurqen is a reconciliation and evidence service. It does not provide investment advice, generate strategies, custody funds, or submit live-money orders. An unresolved order is terminal for that run and cannot be retried through the API.
-
-Controlled faults are labeled in the stored observation and receipt. Replay data is never presented as live exchange behavior.
 
 ## Verification
 
@@ -91,9 +100,12 @@ npm run check
 npm run lint
 npm run smoke
 npm audit --audit-level=moderate
+npm ci --prefix web
+npm run typecheck --prefix web
+npm run build --prefix web
 ```
 
-The test suite covers signing guards, provider adapters, state transitions, duplicate and missing observations, AI response validation, persistence, receipts, and HTTP routes.
+The backend tests cover provider signing, malformed responses, duplicate and missing observations, unknown orders, mismatches, partial fills, concurrent requests, AI evidence validation, persistence, and receipt consistency. The frontend route smoke checks the built SPA routes and assets.
 
 ## License
 
