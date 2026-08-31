@@ -30,7 +30,7 @@ flowchart LR
 Requirements: Node.js 20 or newer.
 
 ```bash
-npm install
+npm ci
 cp .env.example .env.local
 npm run build
 npm test
@@ -52,6 +52,8 @@ npm run dev
 
 The default address is `http://localhost:8787`.
 
+Replay mode stays offline. Add a replay `ORDER_STATE` observation before reconciliation when you want to test a matching provider state. Include the order symbol, client ID, side, type, status, quantity, and limit price when applicable. WEEX replay states also need `positionSide`. The API blocks reconciliation when authoritative replay state is missing or incomplete.
+
 ## API
 
 | Method | Path | Purpose |
@@ -69,11 +71,12 @@ The default address is `http://localhost:8787`.
 ## Provider integrations
 
 - BingX: VST balance, contract metadata, ticker, order history, signed paper-order submission, and bounded reconciliation.
-- WEEX: V3 paper balance, positions, order history, exchange information, and signed paper-order submission.
+- WEEX: V3 paper balance, positions, order history, exchange information, and signed paper-order submission. WEEX `positionSide` defaults to `LONG`; set `SHORT` for short-side hedge orders.
 - Gemini: structured incident explanations using `gemini-2.5-flash`.
 - Groq: optional explanation fallback.
 
 Provider credentials stay on the server. Set `VURQEN_API_TOKEN` when exposing private routes outside a local environment.
+Browser access is disabled by default. Set `VURQEN_CORS_ORIGIN` to one trusted origin when a browser client is required.
 
 ## Safety boundary
 
@@ -85,6 +88,7 @@ Controlled faults are labeled in the stored observation and receipt. Replay data
 
 ```bash
 npm run check
+npm run lint
 npm run smoke
 npm audit --audit-level=moderate
 ```
